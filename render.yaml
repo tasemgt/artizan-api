@@ -1,0 +1,70 @@
+# render.yaml — Render Blueprint for artizan-api.
+# Deploy: connect this repo on Render as a "Blueprint" and it reads this file
+# automatically. Root directory is set per-service below (artizan-api), so
+# the rest of the monorepo (artizan-app, artizan-admin, _deprecated) is
+# untouched by this service's build.
+#
+# Secrets (sync: false) are NOT stored here — Render prompts for them once
+# in its dashboard and keeps them encrypted there, never in git.
+#
+# Database: points at the SAME Supabase Postgres project already used for
+# development (explicit decision, 2026-09-06) — DATABASE_URL below is just
+# the existing dev connection string, entered in Render's dashboard.
+#
+# Redis/BullMQ: src/jobs/queue.ts is not imported anywhere in server.ts
+# (confirmed dead code, REDIS_URL in .env is still an unfilled placeholder)
+# — no Redis instance is provisioned here. Add one later if that job queue
+# is ever actually wired in.
+
+services:
+  - type: web
+    name: artizan-api
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: artizan-api
+    buildCommand: npm install && npm run build
+    # migrate deploy (not db push) — non-interactive, safe to run on every
+    # deploy, only applies migrations not yet marked applied. All current
+    # migrations were already applied to the shared dev DB by hand (see
+    # CLAUDE.md), so this will no-op until the next new migration.
+    preDeployCommand: npx prisma migrate deploy
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 15m
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 30d
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: FLUTTERWAVE_SECRET_KEY
+        sync: false
+      - key: FLUTTERWAVE_WEBHOOK_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: PLATFORM_FEE_NGN
+        sync: false
+      - key: MIN_WALLET_BALANCE_NGN
+        sync: false
+      - key: REQUEST_TIMEOUT_SECONDS
+        sync: false
+      - key: FAR_ARTISAN_RADIUS_KM
+        sync: false
+      - key: ACCESS_CODE_EXPIRY_HOURS
+        sync: false

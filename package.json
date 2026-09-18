@@ -1,0 +1,53 @@
+{
+  "name": "artizan-api",
+  "version": "1.0.0",
+  "description": "Artizan REST API — Fastify + Prisma + PostgreSQL",
+  "main": "src/server.ts",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "postinstall": "prisma generate",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "db:migrate": "prisma migrate dev",
+    "db:generate": "prisma generate",
+    "db:studio": "prisma studio",
+    "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@fastify/compress": "^9.1.0",
+    "@fastify/cors": "^11.2.0",
+    "@fastify/helmet": "^13.1.0",
+    "@fastify/jwt": "^10.1.0",
+    "@fastify/multipart": "^10.1.1",
+    "@fastify/rate-limit": "^11.2.0",
+    "@fastify/swagger": "^8.15.0",
+    "@fastify/swagger-ui": "^4.0.0",
+    "@prisma/client": "^5.20.0",
+    "@sentry/node": "^8.0.0",
+    "@supabase/supabase-js": "^2.115.0",
+    "bcrypt": "^5.1.1",
+    "bullmq": "^5.0.0",
+    "dotenv": "^16.4.0",
+    "fastify": "^5.8.5",
+    "fastify-zod": "^1.4.0",
+    "firebase": "^12.14.0",
+    "firebase-admin": "^12.7.0",
+    "ioredis": "^5.4.0",
+    "nodemailer": "^8.0.10",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "resend": "^3.5.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/node": "^22.0.0",
+    "@types/nodemailer": "^8.0.0",
+    "prisma": "^5.20.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}

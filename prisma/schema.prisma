@@ -1,0 +1,520 @@
+// prisma/schema.prisma
+// Artizan full data model — mirrors Document 2 v3.0 schema specification.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ─────────────────────────────────────────────────────────────
+
+enum RequestStatus {
+  PENDING
+  ARTISAN_ACCEPTED
+  ARTISAN_ARRIVED
+  ARTISAN_COMPLETED
+  USER_COMPLETED
+  COMPLETED
+  USER_CANCELLED
+  ARTISAN_CANCELLED
+  ARTISAN_REJECTED
+}
+
+enum RequestType {
+  COMMUNITY
+  INDEPENDENT
+}
+
+enum FeeStatus {
+  PENDING
+  DEDUCTED
+  FAILED
+  WAIVED
+}
+
+enum WalletOwnerType {
+  USER
+  ARTISAN
+}
+
+enum WalletTxType {
+  FUND
+  PLATFORM_FEE
+  REFUND
+  ADJUSTMENT
+  XP_CREDIT
+}
+
+enum WalletTxStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum CommunityType {
+  RESIDENTIAL
+  OFFICE_PARK
+  CORPORATE_CAMPUS
+  OTHER
+}
+
+enum MembershipStatus {
+  PENDING_COMMUNITY_APPROVAL
+  PENDING_ARTISAN_APPROVAL
+  ACTIVE
+  REJECTED
+}
+
+enum MembershipInitiator {
+  ARTISAN
+  COMMUNITY
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+}
+
+enum CommunityAdminRole {
+  ADMIN
+  SECURITY
+}
+
+enum XpEventType {
+  APP_USE
+  REFERRAL
+  HIGH_RATING
+  BONUS
+}
+
+enum SenderType {
+  USER
+  ARTISAN
+}
+
+enum WithdrawalStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+}
+
+enum ArtisanVerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ── Models ────────────────────────────────────────────────────────────
+
+model User {
+  id                  String    @id @default(uuid())
+  firstName           String
+  lastName            String
+  email               String    @unique
+  phoneNumber         String    @unique
+  passwordHash        String
+  passwordChangedAt   DateTime?
+  profileImageUrl     String?
+  address             String?
+  gender              String?
+  dateOfBirth         DateTime?
+  emailVerifiedAt     DateTime?
+  phoneVerifiedAt     DateTime?
+  geoLocation         Json?
+  walletId            String    @unique
+  cancellationStrikes Int       @default(0)
+  fcmToken            String?
+  isActive            Boolean   @default(true)
+  deletedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  wallet              Wallet             @relation("UserWallet", fields: [walletId], references: [id])
+  serviceRequests     ServiceRequest[]   @relation("UserRequests")
+  chatMessages        ChatMessage[]      @relation("UserMessages")
+  ratingsGiven        Rating[]           @relation("RatingUser")
+
+  @@map("users")
+}
+
+model Artisan {
+  id                  String    @id @default(uuid())
+  firstName           String
+  lastName            String
+  username            String    @unique
+  email               String    @unique
+  phoneNumber         String    @unique
+  passwordHash        String
+  profileImageUrl     String?
+  categoryId          String
+  shortDescription    String?
+  certifications      String?
+  portfolioLink       String?
+  address             String?
+  gender              String?
+  dateOfBirth         DateTime?
+  geoLocation         Json?
+  rating              Float     @default(0)
+  totalRatings        Int       @default(0)
+  walletId            String    @unique
+  emailVerifiedAt     DateTime?
+  phoneVerifiedAt     DateTime?
+  // Not yet acted on by anything — the admin dashboard that reviews
+  // verificationDocuments and flips this is future work. Defaulting every
+  // new artisan to PENDING just gives that future dashboard something real
+  // to query against from day one, instead of a retrofit later.
+  verificationStatus  ArtisanVerificationStatus @default(PENDING)
+  cancellationStrikes Int       @default(0)
+  isAvailable         Boolean   @default(false)
+  isActive            Boolean   @default(true)
+  fcmToken            String?
+  deletedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  category            Category              @relation(fields: [categoryId], references: [id])
+  wallet              Wallet                @relation("ArtisanWallet", fields: [walletId], references: [id])
+  serviceRequests     ServiceRequest[]      @relation("ArtisanRequests")
+  chatMessages        ChatMessage[]         @relation("ArtisanMessages")
+  ratingsReceived     Rating[]              @relation("RatingArtisan")
+  communityMemberships CommunityArtisan[]
+  bankAccounts        BankAccount[]
+  withdrawals         WithdrawalRequest[]
+  xpEvents            XpEvent[]
+  verificationDocuments ArtisanDocument[]
+
+  @@map("artisans")
+}
+
+// Uploaded during signup (optional, capped at 6 client-side) or later from
+// the artisan's profile. fileUrl is a private Supabase Storage PATH, not a
+// public URL — unlike profile photos, these can be ID documents/certs and
+// the bucket is not public; the future admin dashboard generates signed
+// URLs on demand to review them.
+model ArtisanDocument {
+  id            String   @id @default(uuid())
+  artisanId     String
+  fileUrl       String
+  fileType      String   // "image/jpeg" | "application/pdf"
+  fileSizeBytes Int
+  // Original picked filename (Fastify multipart part.filename) — nullable
+  // because documents uploaded before this field existed have none. Shown
+  // in the Account Info document list instead of a generic "Document N".
+  fileName      String?
+  createdAt     DateTime @default(now())
+
+  artisan       Artisan  @relation(fields: [artisanId], references: [id])
+
+  @@map("artisan_documents")
+}
+
+model Category {
+  id         String    @id @default(uuid())
+  name       String
+  imageUrl   String?
+  // Key into the mobile app's CategoryIcons map (e.g. "tailor", "plumber") —
+  // matches artizan-app/src/constants/categories.ts's DUMMY_CATEGORIES so
+  // real seeded rows render with the same icons as the User side's local list.
+  icon       String?
+  isActive   Boolean   @default(true)
+  sortOrder  Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  artisans        Artisan[]
+  serviceRequests ServiceRequest[]
+
+  @@map("categories")
+}
+
+model Community {
+  id               String        @id @default(uuid())
+  name             String
+  slug             String        @unique
+  type             CommunityType @default(RESIDENTIAL)
+  address          String
+  geoLocation      Json?
+  geoRadius        Float?
+  completionPoints Int           @default(5)
+  referralPoints   Int           @default(10)
+  totalPoints      Int           @default(0)
+  discountPercent  Float         @default(25)
+  isActive         Boolean       @default(true)
+  createdAt        DateTime      @default(now())
+
+  artisanMemberships  CommunityArtisan[]
+  communityAdmins     CommunityAdmin[]
+  serviceRequests     ServiceRequest[]
+  pointEvents         CommunityPoint[]
+
+  @@map("communities")
+}
+
+model CommunityArtisan {
+  id            String               @id @default(uuid())
+  communityId   String
+  artisanId     String
+  status        MembershipStatus     @default(PENDING_COMMUNITY_APPROVAL)
+  initiatedBy   MembershipInitiator
+  approvedAt    DateTime?
+  rejectedAt    DateTime?
+  createdAt     DateTime             @default(now())
+
+  community     Community @relation(fields: [communityId], references: [id])
+  artisan       Artisan   @relation(fields: [artisanId], references: [id])
+
+  @@unique([communityId, artisanId])
+  @@map("community_artisans")
+}
+
+model CommunityAdmin {
+  id          String             @id @default(uuid())
+  communityId String
+  email       String             @unique
+  passwordHash String
+  name        String
+  role        CommunityAdminRole @default(ADMIN)
+  isActive    Boolean            @default(true)
+  createdAt   DateTime           @default(now())
+
+  community   Community @relation(fields: [communityId], references: [id])
+
+  @@map("community_admins")
+}
+
+model CommunityPoint {
+  id              String   @id @default(uuid())
+  communityId     String
+  type            String   // REFERRAL | COMPLETION
+  amount          Int
+  artisanId       String?
+  serviceRequestId String?
+  createdAt       DateTime @default(now())
+
+  community       Community @relation(fields: [communityId], references: [id])
+
+  @@map("community_points")
+}
+
+model ServiceRequest {
+  id                    String         @id @default(uuid())
+  userId                String
+  artisanId             String?
+  categoryId            String
+  communityId           String?
+  communityNameFreeText String?
+  requestType           RequestType    @default(INDEPENDENT)
+  accessCode            String?
+  accessCodeExpiresAt   DateTime?
+  accessCodeUsedAt      DateTime?
+  status                RequestStatus  @default(PENDING)
+  feeStatus             FeeStatus      @default(PENDING)
+  platformFeeUser       Decimal?       @db.Decimal(10, 2)
+  platformFeeArtisan    Decimal?       @db.Decimal(10, 2)
+  feeDeductedAt         DateTime?
+  userCoords            Json
+  artisanAcceptedCoords Json?
+  coordinatesTrail      Json[]
+  cancellationReason    String?
+  cancelledBy           String?
+  completedAt           DateTime?
+  firebasePath          String?
+  deletedAt             DateTime?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  user        User       @relation("UserRequests",    fields: [userId],     references: [id])
+  artisan     Artisan?   @relation("ArtisanRequests", fields: [artisanId],  references: [id])
+  category    Category   @relation(fields: [categoryId], references: [id])
+  community   Community? @relation(fields: [communityId], references: [id])
+  chatMessages ChatMessage[]
+  rating      Rating?
+  cancellationLogs CancellationLog[]
+  walletTransactions WalletTransaction[] @relation("RequestTransactions")
+
+  @@map("service_requests")
+}
+
+model ChatMessage {
+  id               String    @id @default(uuid())
+  serviceRequestId String
+  senderId         String
+  senderType       SenderType
+  message          String
+  sentAt           DateTime
+  createdAt        DateTime  @default(now())
+
+  serviceRequest   ServiceRequest @relation(fields: [serviceRequestId], references: [id])
+  user             User?    @relation("UserMessages",    fields: [senderId], references: [id], map: "chat_user_fk")
+  artisan          Artisan? @relation("ArtisanMessages", fields: [senderId], references: [id], map: "chat_artisan_fk")
+
+  @@map("chat_messages")
+}
+
+model Wallet {
+  id          String          @id @default(uuid())
+  ownerId     String
+  ownerType   WalletOwnerType
+  balance     Decimal         @default(0) @db.Decimal(12, 2)
+  xpPoints    Int             @default(0)
+  currency    String          @default("NGN")
+  isLocked    Boolean         @default(false)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  userOwner    User?    @relation("UserWallet")
+  artisanOwner Artisan? @relation("ArtisanWallet")
+  transactions WalletTransaction[]
+  withdrawals  WithdrawalRequest[]
+  xpEvents     XpEvent[]
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id               String         @id @default(uuid())
+  walletId         String
+  type             WalletTxType
+  amount           Decimal        @db.Decimal(12, 2)
+  xpAmount         Int?
+  balanceBefore    Decimal        @db.Decimal(12, 2)
+  balanceAfter     Decimal        @db.Decimal(12, 2)
+  xpBefore         Int?
+  xpAfter          Int?
+  referenceId      String?
+  serviceRequestId String?
+  status           WalletTxStatus @default(SUCCESS)
+  metadata         Json?
+  createdAt        DateTime       @default(now())
+
+  wallet          Wallet          @relation(fields: [walletId], references: [id])
+  serviceRequest  ServiceRequest? @relation("RequestTransactions", fields: [serviceRequestId], references: [id])
+
+  @@map("wallet_transactions")
+}
+
+model XpEvent {
+  id         String      @id @default(uuid())
+  walletId   String
+  ownerId    String
+  ownerType  WalletOwnerType
+  eventType  XpEventType
+  xpAmount   Int
+  description String?
+  createdAt  DateTime    @default(now())
+
+  wallet     Wallet  @relation(fields: [walletId], references: [id])
+  artisan    Artisan? @relation(fields: [ownerId], references: [id], map: "xp_artisan_fk")
+
+  @@map("xp_events")
+}
+
+model BankAccount {
+  id            String   @id @default(uuid())
+  artisanId     String
+  bankCode      String
+  bankName      String
+  accountNumber String   // encrypted at application layer
+  accountName   String
+  isPrimary     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  artisan       Artisan  @relation(fields: [artisanId], references: [id])
+
+  @@map("bank_accounts")
+}
+
+model WithdrawalRequest {
+  id              String           @id @default(uuid())
+  artisanId       String
+  walletId        String
+  bankAccountId   String?
+  amount          Decimal          @db.Decimal(12, 2)
+  status          WithdrawalStatus @default(PENDING)
+  flutterwaveRef  String?
+  processedAt     DateTime?
+  failureReason   String?
+  createdAt       DateTime         @default(now())
+
+  artisan         Artisan          @relation(fields: [artisanId], references: [id])
+  wallet          Wallet           @relation(fields: [walletId], references: [id])
+
+  @@map("withdrawal_requests")
+}
+
+model Rating {
+  id               String   @id @default(uuid())
+  serviceRequestId String   @unique
+  userId           String
+  artisanId        String
+  score            Int
+  comment          String?
+  createdAt        DateTime @default(now())
+
+  serviceRequest   ServiceRequest @relation(fields: [serviceRequestId], references: [id])
+  user             User    @relation("RatingUser",    fields: [userId],    references: [id])
+  artisan          Artisan @relation("RatingArtisan", fields: [artisanId], references: [id])
+
+  @@map("ratings")
+}
+
+model CancellationLog {
+  id               String   @id @default(uuid())
+  requestId        String
+  cancelledBy      String
+  reason           String?
+  strikeApplied    Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  serviceRequest   ServiceRequest @relation(fields: [requestId], references: [id])
+
+  @@map("cancellation_logs")
+}
+
+model AdminUser {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         AdminRole @default(SUPER_ADMIN)
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+
+  @@map("admin_users")
+}
+
+// recipientId/recipientType are a polymorphic association (recipient is
+// EITHER a User OR an Artisan, decided by recipientType) — deliberately NOT
+// a Prisma @relation. A single column can't hold two enforced foreign keys
+// at once (Postgres requires it to satisfy both simultaneously, which no
+// real UUID ever does) — that was a real pre-existing bug here that made it
+// impossible to insert a Notification row for anyone, fixed 2026-09-05.
+// Query by recipientId + recipientType directly instead of relation includes.
+model Notification {
+  id            String   @id @default(uuid())
+  recipientId   String
+  recipientType String
+  title         String
+  body          String
+  data          Json?
+  readAt        DateTime?
+  createdAt     DateTime @default(now())
+
+  @@map("notifications")
+}
+
+model OtpCode {
+  id        String   @id @default(uuid())
+  email     String
+  code      String
+  purpose   String   // "verify" | "reset"
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([email, purpose])
+  @@map("otp_codes")
+}
