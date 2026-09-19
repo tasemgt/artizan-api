@@ -1,8 +1,11 @@
 # render.yaml — Render Blueprint for artizan-api.
 # Deploy: connect this repo on Render as a "Blueprint" and it reads this file
-# automatically. Root directory is set per-service below (artizan-api), so
-# the rest of the monorepo (artizan-app, artizan-admin, _deprecated) is
-# untouched by this service's build.
+# automatically. This file MUST live at the root of the git repo Render is
+# connected to for Blueprint auto-discovery to find it at all — artizan-api
+# is its OWN independent git repo (remote: github.com/tasemgt/artizan-api),
+# not a subfolder of a bigger monorepo repo, even though it sits inside the
+# `artizan/` folder on disk locally. No `rootDir` field is needed below
+# because of that — the repo root and the service root are the same thing.
 #
 # Secrets (sync: false) are NOT stored here — Render prompts for them once
 # in its dashboard and keeps them encrypted there, never in git.
@@ -22,7 +25,6 @@ services:
     runtime: node
     plan: free
     region: oregon
-    rootDir: artizan-api
     buildCommand: npm install && npm run build
     # migrate deploy (not db push) — non-interactive, safe to run on every
     # deploy, only applies migrations not yet marked applied. All current
