@@ -78,10 +78,7 @@ app.setErrorHandler((error: FastifyError, request, reply) => {
     success: false,
     error: {
       code:    error.code ?? 'INTERNAL_ERROR',
-      // TEMPORARY (2026-09-19): unmasking real 500 messages to diagnose a
-      // live registration failure without dashboard log access. Revert to
-      // the generic message before this is exposed to real users.
-      message: error.message,
+      message: statusCode === 500 ? 'An unexpected error occurred.' : error.message,
     },
   });
 });
