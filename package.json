@@ -26,6 +26,8 @@
     "@prisma/client": "^5.20.0",
     "@sentry/node": "^8.0.0",
     "@supabase/supabase-js": "^2.115.0",
+    "@types/bcrypt": "^5.0.2",
+    "@types/nodemailer": "^8.0.0",
     "bcrypt": "^5.1.1",
     "bullmq": "^5.0.0",
     "dotenv": "^16.4.0",
@@ -42,9 +44,7 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
-    "@types/bcrypt": "^5.0.2",
     "@types/node": "^22.0.0",
-    "@types/nodemailer": "^8.0.0",
     "prisma": "^5.20.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0"
