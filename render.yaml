@@ -18,6 +18,14 @@
 # (confirmed dead code, REDIS_URL in .env is still an unfilled placeholder)
 # — no Redis instance is provisioned here. Add one later if that job queue
 # is ever actually wired in.
+#
+# buildCommand below is deliberately just `npm install`, not
+# `npm install && npm run build` — Render was observed ignoring the custom
+# buildCommand and running plain `npm install` regardless (root cause never
+# fully identified across two Blueprint recreation attempts, 2026-09-19).
+# Rather than keep fighting that, the TypeScript build now runs from
+# `postinstall` in package.json, which fires as part of ANY `npm install`
+# invocation — so this works whether or not Render ever honors this field.
 
 services:
   - type: web
@@ -25,7 +33,7 @@ services:
     runtime: node
     plan: free
     region: oregon
-    buildCommand: npm install && npm run build
+    buildCommand: npm install
     # migrate deploy (not db push) — non-interactive, safe to run on every
     # deploy, only applies migrations not yet marked applied. All current
     # migrations were already applied to the shared dev DB by hand (see
