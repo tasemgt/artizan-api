@@ -90,34 +90,40 @@ const authUserRoutes: FastifyPluginAsync = async (app) => {
 
     const passwordHash = await hashPassword(password);
 
-    // Create user + wallet atomically
-    const user = await prisma.$transaction(async (tx) => {
-      const created = await tx.user.create({
-        data: {
-          firstName,
-          lastName,
-          email,
-          phoneNumber,
-          passwordHash,
-          profileImageUrl: profileImageUrl ?? null,
-          wallet: {
-            create: {
-              ownerId: crypto.randomUUID(),
-              ownerType: "USER",
-              balance: 0,
-              xpPoints: 0,
-              currency: "NGN",
+    // Create user + wallet + OTP and send the verification email all inside
+    // one transaction - if the email send throws (bad creds, unverified
+    // Resend domain, etc.), everything rolls back rather than leaving an
+    // orphaned user row that can never be re-registered or verified.
+    const user = await prisma.$transaction(
+      async (tx) => {
+        const created = await tx.user.create({
+          data: {
+            firstName,
+            lastName,
+            email,
+            phoneNumber,
+            passwordHash,
+            profileImageUrl: profileImageUrl ?? null,
+            wallet: {
+              create: {
+                ownerId: crypto.randomUUID(),
+                ownerType: "USER",
+                balance: 0,
+                xpPoints: 0,
+                currency: "NGN",
+              },
             },
           },
-        },
-        include: { wallet: true },
-      });
-      return created;
-    });
+          include: { wallet: true },
+        });
 
-    // Send 6-digit OTP to email
-    const code = await createOtp(email, "verify");
-    await sendOtpEmail(email, firstName, code, "verify");
+        const code = await createOtp(email, "verify", tx);
+        await sendOtpEmail(email, firstName, code, "verify");
+
+        return created;
+      },
+      { timeout: 15000 },
+    );
 
     return reply.status(201).send(
       ok({

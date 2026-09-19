@@ -86,32 +86,44 @@ const authArtisanRoutes: FastifyPluginAsync = async (app) => {
 
     const passwordHash = await hashPassword(data.password);
 
-    const artisan = await prisma.artisan.create({
-      data: {
-        firstName:        data.firstName,
-        lastName:         data.lastName,
-        username:         data.username,
-        email:            data.email,
-        phoneNumber:      data.phoneNumber,
-        passwordHash,
-        category:         { connect: { id: data.categoryId } },
-        shortDescription: data.shortDescription ?? null,
-        certifications:   data.certifications ?? null,
-        profileImageUrl:  data.profileImageUrl ?? null,
-        wallet: {
-          create: {
-            ownerId:   crypto.randomUUID(),
-            ownerType: 'ARTISAN' as const,
-            balance:   0,
-            xpPoints:  0,
-            currency:  'NGN',
+    // Create artisan + wallet + OTP and send the verification email all
+    // inside one transaction - if the email send throws (bad creds,
+    // unverified Resend domain, etc.), everything rolls back rather than
+    // leaving an orphaned artisan row that can never be re-registered or
+    // verified.
+    const artisan = await prisma.$transaction(
+      async (tx) => {
+        const created = await tx.artisan.create({
+          data: {
+            firstName:        data.firstName,
+            lastName:         data.lastName,
+            username:         data.username,
+            email:            data.email,
+            phoneNumber:      data.phoneNumber,
+            passwordHash,
+            category:         { connect: { id: data.categoryId } },
+            shortDescription: data.shortDescription ?? null,
+            certifications:   data.certifications ?? null,
+            profileImageUrl:  data.profileImageUrl ?? null,
+            wallet: {
+              create: {
+                ownerId:   crypto.randomUUID(),
+                ownerType: 'ARTISAN' as const,
+                balance:   0,
+                xpPoints:  0,
+                currency:  'NGN',
+              },
+            },
           },
-        },
-      },
-    });
+        });
 
-    const code = await createOtp(data.email, 'verify');
-    await sendOtpEmail(data.email, data.firstName, code, 'verify');
+        const code = await createOtp(data.email, 'verify', tx);
+        await sendOtpEmail(data.email, data.firstName, code, 'verify');
+
+        return created;
+      },
+      { timeout: 15000 },
+    );
 
     return reply.status(201).send(ok({
       artisan: sanitiseUser(artisan),
