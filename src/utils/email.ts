@@ -80,8 +80,15 @@ const sendEmailProd = async (options: EmailOptions): Promise<void> => {
   console.log(`📧 [Resend] Email sent to ${options.email}`);
 };
 
-const sendEmail =
-  process.env.NODE_ENV === "production" ? sendEmailProd : sendEmailDev;
+// EMAIL_PROVIDER decouples transport choice from NODE_ENV - deployed
+// environments still need to test signups against Mailtrap before a real
+// sending domain is verified with Resend. Falls back to the NODE_ENV-based
+// default when unset, so existing local/.env setups are unaffected.
+const emailProvider =
+  process.env.EMAIL_PROVIDER ??
+  (process.env.NODE_ENV === "production" ? "resend" : "mailtrap");
+
+const sendEmail = emailProvider === "resend" ? sendEmailProd : sendEmailDev;
 
 export default sendEmail;
 

@@ -62,6 +62,19 @@ services:
         sync: false
       - key: FLUTTERWAVE_WEBHOOK_SECRET
         sync: false
+      # mailtrap for now, deliberately - no sending domain verified with
+      # Resend yet. Flip to "resend" (and fill in RESEND_API_KEY/EMAIL_FROM
+      # below) once that's done - see src/utils/email.ts.
+      - key: EMAIL_PROVIDER
+        value: mailtrap
+      - key: MAILTRAP_HOST
+        sync: false
+      - key: MAILTRAP_PORT
+        sync: false
+      - key: MAILTRAP_USER
+        sync: false
+      - key: MAILTRAP_PASS
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM
