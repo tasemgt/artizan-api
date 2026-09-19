@@ -2,7 +2,7 @@
   "name": "artizan-api",
   "version": "1.0.0",
   "description": "Artizan REST API — Fastify + Prisma + PostgreSQL",
-  "main": "src/server.ts",
+  "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "postinstall": "prisma generate",
