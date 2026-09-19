@@ -64,13 +64,19 @@ const sendEmailDev = async (options: EmailOptions): Promise<void> => {
 // ── Prod transport: Resend ────────────────────────────────────────────
 const sendEmailProd = async (options: EmailOptions): Promise<void> => {
   const resend = new Resend(process.env.RESEND_API_KEY ?? "");
-  await resend.emails.send({
+  const { error } = await resend.emails.send({
     from: `${APP_NAME} <${FROM}>`,
     to: options.email,
     subject: options.subject,
     text: options.message,
     html: options.html ?? options.message.replace(/\n/g, "<br>"),
   });
+  // Resend's SDK resolves normally (does not throw) on API-level failures
+  // (bad/missing key, unverified sending domain, etc.) - without this check
+  // a failed send looks identical to a successful one to every caller.
+  if (error) {
+    throw new Error(`Resend failed to send email to ${options.email}: ${error.name} - ${error.message}`);
+  }
   console.log(`📧 [Resend] Email sent to ${options.email}`);
 };
 
