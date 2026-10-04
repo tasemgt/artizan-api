@@ -75,6 +75,13 @@ services:
         sync: false
       - key: MAILTRAP_PASS
         sync: false
+      # TEMPORARY (2026-10-04, see CLAUDE.md) - fixes every OTP (signup
+      # verify AND password reset, for both User and Artisan) to this one
+      # value so testing doesn't need the Mailtrap sandbox at all. SECURITY:
+      # delete this var entirely before any real user relies on verify/reset
+      # - see the comment in src/utils/otp.ts.
+      - key: OTP_FIXED_CODE
+        value: "123456"
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM

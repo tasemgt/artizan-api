@@ -25,7 +25,14 @@ export const createOtp = async (
     data:  { usedAt: new Date() },
   });
 
-  const code      = Math.floor(100000 + Math.random() * 900000).toString();
+  // TEMPORARY (2026-10-04, see CLAUDE.md) - OTP_FIXED_CODE lets testing use
+  // one known code for every signup/reset instead of checking the Mailtrap
+  // sandbox each time. SECURITY: while set, this applies to BOTH verify and
+  // reset - anyone who knows the fixed code can "verify" or reset the
+  // password for ANY email, since the code is no longer tied to a specific
+  // inbox at all. Must be unset before any real user relies on this flow.
+  const code = process.env.OTP_FIXED_CODE
+    ?? Math.floor(100000 + Math.random() * 900000).toString();
   const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 
   await db.otpCode.create({ data: { email, code, purpose, expiresAt } });
