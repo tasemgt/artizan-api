@@ -1,19 +1,29 @@
 // src/routes/admin.ts
-// Stub. No admin auth or logic implemented in Fastify yet. The deprecated
-// Express backend had a working admin login (see
-// _deprecated/artizan-api-express/src/routes/auth.admin.routes.js) that was
-// never ported — worth revisiting rather than rebuilding from scratch.
-// Phase 2+.
+// Admin dashboard v1 (2026-10-24) - analytics/overview is real. Auth login
+// itself lives in auth.admin.ts/auth.community.ts, not here. User/Artisan/
+// Category CRUD for the admin dashboard live in their own route files
+// (users.ts, artisans.ts, categories.ts) rather than being duplicated here.
 
 import { FastifyPluginAsync } from 'fastify';
 import bcrypt from 'bcrypt';
 import { prisma } from '../server';
 import { ok, fail } from '../utils/helpers';
+import { requireAdmin } from '../middleware/auth';
 
 const adminRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/', async (_req, reply) => {
     return reply.send(ok(null));
+  });
+
+  // ── GET /analytics/overview — dashboard KPI tiles ───────────────────
+  app.get('/analytics/overview', { preHandler: requireAdmin }, async (_req, reply) => {
+    const [totalUsers, totalArtisans, pendingVerifications] = await Promise.all([
+      prisma.user.count(),
+      prisma.artisan.count(),
+      prisma.artisan.count({ where: { verificationStatus: 'PENDING' } }),
+    ]);
+    return reply.send(ok({ totalUsers, totalArtisans, pendingVerifications }));
   });
 
   // TEMPORARY (2026-10-24) - one-off bootstrap for the first AdminUser row,

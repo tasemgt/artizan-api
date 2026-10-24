@@ -7,10 +7,14 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../server';
-import { ok, fail } from '../utils/helpers';
+import { ok, fail, parsePagination, paginationMeta } from '../utils/helpers';
 import { sanitiseUser } from '../services/authService';
-import { requireArtisan } from '../middleware/auth';
+import { requireArtisan, requireAdmin } from '../middleware/auth';
 import { uploadProfileImage, uploadVerificationDocument } from '../services/supabaseStorage';
+
+const verificationSchema = z.object({
+  status: z.enum(['APPROVED', 'REJECTED']),
+});
 
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const ALLOWED_DOCUMENT_TYPES = new Set(['image/jpeg', 'application/pdf']);
@@ -36,6 +40,72 @@ const artisansRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/nearby', async (_req, reply) => {
     return reply.send(ok([]));
+  });
+
+  // ── GET / — admin: paginated/searchable/filterable artisan list ────
+  app.get('/', { preHandler: requireAdmin }, async (req, reply) => {
+    const { page, limit, skip } = parsePagination(req.query);
+    const query = req.query as { search?: string; verificationStatus?: string };
+    const search = query.search?.trim();
+    const verificationStatus = query.verificationStatus;
+
+    const where = {
+      ...(verificationStatus ? { verificationStatus: verificationStatus as any } : {}),
+      ...(search
+        ? {
+            OR: [
+              { firstName: { contains: search, mode: 'insensitive' as const } },
+              { lastName:  { contains: search, mode: 'insensitive' as const } },
+              { email:     { contains: search, mode: 'insensitive' as const } },
+              { username:  { contains: search, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
+    };
+
+    const [artisans, total] = await Promise.all([
+      prisma.artisan.findMany({
+        where, skip, take: limit, orderBy: { createdAt: 'desc' },
+        include: { category: true },
+      }),
+      prisma.artisan.count({ where }),
+    ]);
+
+    return reply.send(ok(artisans.map(sanitiseUser), paginationMeta(total, page, limit)));
+  });
+
+  // ── GET /:id — admin: single artisan + uploaded verification docs ──
+  app.get<{ Params: { id: string } }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const artisan = await prisma.artisan.findUnique({
+      where: { id: req.params.id },
+      include: { category: true },
+    });
+    if (!artisan) return reply.status(404).send(fail('NOT_FOUND', 'Artisan not found.'));
+
+    const documents = await prisma.artisanDocument.findMany({
+      where:   { artisanId: req.params.id },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return reply.send(ok({ ...sanitiseUser(artisan), documents }));
+  });
+
+  // ── PATCH /:id/verification — admin: approve/reject an artisan ─────
+  app.patch<{ Params: { id: string } }>('/:id/verification', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = verificationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send(fail('VALIDATION_ERROR', 'Invalid input.', parsed.error.flatten().fieldErrors));
+    }
+
+    const artisan = await prisma.artisan.findUnique({ where: { id: req.params.id } });
+    if (!artisan) return reply.status(404).send(fail('NOT_FOUND', 'Artisan not found.'));
+
+    const updated = await prisma.artisan.update({
+      where: { id: req.params.id },
+      data:  { verificationStatus: parsed.data.status },
+      include: { category: true },
+    });
+    return reply.send(ok(sanitiseUser(updated)));
   });
 
   // ── GET /me — the authenticated artisan's own profile ──────────────

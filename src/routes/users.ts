@@ -9,9 +9,9 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../server';
-import { ok, fail } from '../utils/helpers';
+import { ok, fail, parsePagination, paginationMeta } from '../utils/helpers';
 import { sanitiseUser } from '../services/authService';
-import { requireUser } from '../middleware/auth';
+import { requireUser, requireAdmin } from '../middleware/auth';
 import { uploadProfileImage } from '../services/supabaseStorage';
 
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -25,6 +25,29 @@ const updateProfileSchema = z.object({
 });
 
 const usersRoutes: FastifyPluginAsync = async (app) => {
+
+  // ── GET / — admin: paginated/searchable user list ──────────────────
+  app.get('/', { preHandler: requireAdmin }, async (req, reply) => {
+    const { page, limit, skip } = parsePagination(req.query);
+    const search = (req.query as { search?: string }).search?.trim();
+
+    const where = search
+      ? {
+          OR: [
+            { firstName: { contains: search, mode: 'insensitive' as const } },
+            { lastName:  { contains: search, mode: 'insensitive' as const } },
+            { email:     { contains: search, mode: 'insensitive' as const } },
+          ],
+        }
+      : {};
+
+    const [users, total] = await Promise.all([
+      prisma.user.findMany({ where, skip, take: limit, orderBy: { createdAt: 'desc' } }),
+      prisma.user.count({ where }),
+    ]);
+
+    return reply.send(ok(users.map(sanitiseUser), paginationMeta(total, page, limit)));
+  });
 
   // ── GET /me — the authenticated user's own profile ────────────────
   app.get('/me', { preHandler: requireUser }, async (req, reply) => {
