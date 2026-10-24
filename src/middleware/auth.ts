@@ -8,7 +8,9 @@ declare module 'fastify' {
   interface FastifyRequest {
     authUser: {
       id:   string;
-      role: 'user' | 'artisan' | 'admin' | 'community_admin' | 'community_security';
+      // 'super_admin' matches the AdminRole enum's only value (SUPER_ADMIN)
+      // and the artizan-admin frontend's existing role checks - not 'admin'.
+      role: 'user' | 'artisan' | 'super_admin' | 'community_admin' | 'community_security';
     };
   }
 }
@@ -40,6 +42,6 @@ export const requireRole = (...roles: string[]) =>
 
 export const requireUser    = requireRole('user');
 export const requireArtisan = requireRole('artisan');
-export const requireAdmin   = requireRole('admin');
+export const requireAdmin   = requireRole('super_admin');
 export const requireCommunityStaff = requireRole('community_admin', 'community_security');
 export const requireCommunityAdmin = requireRole('community_admin');

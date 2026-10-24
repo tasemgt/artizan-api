@@ -57,9 +57,11 @@ app.get('/health', async () => ({
 
 // ── Routes ────────────────────────────────────────────────────────────
 // Phase 1
-app.register(import('./routes/auth.user'),    { prefix: '/api/v1/auth/user' });
-app.register(import('./routes/auth.artisan'), { prefix: '/api/v1/auth/artisan' });
-app.register(import('./routes/categories'),   { prefix: '/api/v1/categories' });
+app.register(import('./routes/auth.user'),      { prefix: '/api/v1/auth/user' });
+app.register(import('./routes/auth.artisan'),   { prefix: '/api/v1/auth/artisan' });
+app.register(import('./routes/auth.admin'),     { prefix: '/api/v1/auth/admin' });
+app.register(import('./routes/auth.community'), { prefix: '/api/v1/auth/community' });
+app.register(import('./routes/categories'),     { prefix: '/api/v1/categories' });
 
 // Phase 2+ — stubs, see each file's header comment
 app.register(import('./routes/users'),           { prefix: '/api/v1/users' });
