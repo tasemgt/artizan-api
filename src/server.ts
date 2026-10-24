@@ -29,6 +29,14 @@ const app = Fastify({ loggerInstance: logger });
 app.register(cors, {
   origin: process.env.ALLOWED_ORIGINS?.split(',') ?? ['http://localhost:5173', 'http://localhost:3000'],
   credentials: true,
+  // @fastify/cors defaults methods to 'GET,HEAD,POST' only - PATCH/DELETE
+  // were silently blocked at the browser preflight stage for every write
+  // endpoint the admin dashboard uses (change-password, artisan
+  // verification, category edit/delete) that isn't a plain POST. The
+  // request never reached this server at all, so the frontend's error
+  // handling (which does try to read the real backend error message) had
+  // nothing to read - axios only ever saw a bare network error.
+  methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE'],
 });
 
 app.register(jwt, {
