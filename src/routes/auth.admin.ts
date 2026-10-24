@@ -7,12 +7,18 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../server';
-import { verifyPassword, ok, fail } from '../utils/helpers';
+import { hashPassword, verifyPassword, ok, fail } from '../utils/helpers';
 import { signTokens, sanitiseUser } from '../services/authService';
+import { requireAdmin } from '../middleware/auth';
 
 const loginSchema = z.object({
   email:    z.string().email(),
   password: z.string().min(1),
+});
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword:     z.string().min(8).max(128),
 });
 
 const authAdminRoutes: FastifyPluginAsync = async (app) => {
@@ -35,6 +41,28 @@ const authAdminRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(
       ok({ token, refreshToken, user: { ...sanitiseUser(admin), role: 'super_admin' } }),
     );
+  });
+
+  // ── PATCH /change-password (authenticated) ─────────────────────────
+  app.patch('/change-password', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = changePasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send(fail('VALIDATION_ERROR', 'Current and new password required.'));
+    }
+    const { currentPassword, newPassword } = parsed.data;
+
+    const admin = await prisma.adminUser.findUnique({ where: { id: req.authUser.id } });
+    if (!admin) return reply.status(404).send(fail('NOT_FOUND', 'Admin not found.'));
+
+    const valid = await verifyPassword(currentPassword, admin.passwordHash);
+    if (!valid) {
+      return reply.status(401).send(fail('INVALID_PASSWORD', 'Current password is incorrect.'));
+    }
+
+    const passwordHash = await hashPassword(newPassword);
+    await prisma.adminUser.update({ where: { id: admin.id }, data: { passwordHash } });
+
+    return reply.send(ok({ message: 'Password changed successfully.' }));
   });
 
 };
