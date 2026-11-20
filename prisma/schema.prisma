@@ -220,6 +220,11 @@ model Category {
   // matches artizan-app/src/constants/categories.ts's DUMMY_CATEGORIES so
   // real seeded rows render with the same icons as the User side's local list.
   icon       String?
+  // Was only a local, per-category value in DUMMY_CATEGORIES (never real) -
+  // added here 2026-11-20 when the User side's matching flow moved off that
+  // local list entirely, onto this real one. Seeded to match the exact
+  // values DUMMY_CATEGORIES already had, by name.
+  platformFeeNgn Int   @default(500)
   isActive   Boolean   @default(true)
   sortOrder  Int       @default(0)
   createdAt  DateTime  @default(now())

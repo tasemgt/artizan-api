@@ -9,10 +9,11 @@ import { ok, fail } from '../utils/helpers';
 import { requireAdmin } from '../middleware/auth';
 
 const categorySchema = z.object({
-  name:      z.string().min(1).max(60),
-  icon:      z.string().max(60).nullable().optional(),
-  imageUrl:  z.string().url().nullable().optional(),
-  sortOrder: z.number().int().optional(),
+  name:           z.string().min(1).max(60),
+  icon:           z.string().max(60).nullable().optional(),
+  imageUrl:       z.string().url().nullable().optional(),
+  sortOrder:      z.number().int().optional(),
+  platformFeeNgn: z.number().int().positive().optional(),
 });
 
 const updateCategorySchema = categorySchema.partial().extend({
@@ -30,7 +31,7 @@ const categoriesRoutes: FastifyPluginAsync = async (app) => {
       const categories = await prisma.category.findMany({
         where:   includeInactive ? {} : { isActive: true },
         orderBy: { sortOrder: 'asc' },
-        select:  { id: true, name: true, imageUrl: true, icon: true, sortOrder: true, isActive: true },
+        select:  { id: true, name: true, imageUrl: true, icon: true, sortOrder: true, isActive: true, platformFeeNgn: true },
       });
       return reply.send(ok(categories));
     } catch {
