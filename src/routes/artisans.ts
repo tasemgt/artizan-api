@@ -6,14 +6,28 @@
 
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../server';
-import { ok, fail, parsePagination, paginationMeta } from '../utils/helpers';
+import { ok, fail, parsePagination, paginationMeta, haversineKm } from '../utils/helpers';
 import { sanitiseUser } from '../services/authService';
-import { requireArtisan, requireAdmin } from '../middleware/auth';
+import { requireArtisan, requireAdmin, requireUser } from '../middleware/auth';
 import { uploadProfileImage, uploadVerificationDocument } from '../services/supabaseStorage';
 
 const verificationSchema = z.object({
   status: z.enum(['APPROVED', 'REJECTED']),
+});
+
+const availabilitySchema = z.object({
+  isAvailable: z.boolean(),
+  // Required when going available - optional/ignored when going offline.
+  latitude:  z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
+});
+
+const nearbyQuerySchema = z.object({
+  categoryId: z.string().uuid(),
+  latitude:   z.coerce.number().min(-90).max(90),
+  longitude:  z.coerce.number().min(-180).max(180),
 });
 
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -38,8 +52,47 @@ const artisansRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(ok([]));
   });
 
-  app.get('/nearby', async (_req, reply) => {
-    return reply.send(ok([]));
+  // ── GET /nearby — real: available, active, APPROVED artisans in a
+  // category, within FAR_ARTISAN_RADIUS_KM of the given point, nearest
+  // first. Distance filtering happens in app code via haversineKm rather
+  // than a PostGIS query - fine at this scale, revisit if artisan volume
+  // ever makes an in-DB candidate pool worth it.
+  app.get('/nearby', { preHandler: requireUser }, async (req, reply) => {
+    const parsed = nearbyQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return reply.status(400).send(
+        fail('VALIDATION_ERROR', 'categoryId, latitude, and longitude are required.', parsed.error.flatten().fieldErrors),
+      );
+    }
+    const { categoryId, latitude, longitude } = parsed.data;
+    const radiusKm = parseFloat(process.env.FAR_ARTISAN_RADIUS_KM ?? '10');
+
+    const candidates = await prisma.artisan.findMany({
+      where: {
+        categoryId,
+        isAvailable: true,
+        isActive: true,
+        verificationStatus: 'APPROVED',
+        geoLocation: { not: Prisma.JsonNull },
+      },
+      include: { category: true },
+    });
+
+    const nearby = candidates
+      .map((artisan) => {
+        const geo = artisan.geoLocation as { coordinates?: [number, number] } | null;
+        if (!geo?.coordinates) return null;
+        const [lng, lat] = geo.coordinates;
+        return { artisan, distanceKm: haversineKm(latitude, longitude, lat, lng) };
+      })
+      .filter((x): x is { artisan: (typeof candidates)[number]; distanceKm: number } => x !== null && x.distanceKm <= radiusKm)
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .map(({ artisan, distanceKm }) => ({
+        ...sanitiseUser(artisan),
+        distanceKm: Math.round(distanceKm * 10) / 10,
+      }));
+
+    return reply.send(ok(nearby));
   });
 
   // ── GET / — admin: paginated/searchable/filterable artisan list ────
@@ -144,6 +197,40 @@ const artisansRoutes: FastifyPluginAsync = async (app) => {
       },
       include: { category: true },
     });
+    return reply.send(ok(sanitiseUser(artisan)));
+  });
+
+  // ── PATCH /me/availability — go online/offline + report live location.
+  // Location is captured once per toggle, not continuously tracked in the
+  // background - it'll go stale if the artisan leaves the app idle while
+  // "available." Acceptable v1 limitation; real-time position wiring is
+  // deferred to the websocket pass once service-requests are real.
+  app.patch('/me/availability', { preHandler: requireArtisan }, async (req, reply) => {
+    const parsed = availabilitySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send(fail('VALIDATION_ERROR', 'Invalid input.', parsed.error.flatten().fieldErrors));
+    }
+    const { isAvailable, latitude, longitude } = parsed.data;
+
+    if (isAvailable && (latitude === undefined || longitude === undefined)) {
+      return reply.status(400).send(fail('VALIDATION_ERROR', 'latitude and longitude are required to go available.'));
+    }
+
+    const artisan = await prisma.artisan.update({
+      where: { id: req.authUser.id },
+      data: {
+        isAvailable,
+        // GeoJSON Point ([longitude, latitude], not [lat, lng]) - matches
+        // the shape artizan-app's ApiArtisan.geoLocation type already
+        // expects. Left untouched when going offline - no reason to
+        // discard the last known position.
+        ...(isAvailable
+          ? { geoLocation: { type: 'Point', coordinates: [longitude!, latitude!] } }
+          : {}),
+      },
+      include: { category: true },
+    });
+
     return reply.send(ok(sanitiseUser(artisan)));
   });
 
