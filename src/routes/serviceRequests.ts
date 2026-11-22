@@ -117,13 +117,16 @@ const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
     return reply.status(201).send(ok(serialize(serviceRequest)));
   });
 
-  // ── GET /mine — artisan: every request addressed to them, any status.
-  // Mobile does its own client-side filtering per screen (Home: PENDING/
-  // ACCEPTED-ish, History: COMPLETED/CANCELLED-ish) exactly like it already
-  // did against the local AsyncStorage array - this just swaps the source.
+  // ── GET /mine — artisan: every request addressed to them, any status
+  // EXCEPT EXPIRED. Mobile does its own client-side filtering per screen
+  // (Home: PENDING/ACCEPTED-ish, History: COMPLETED/CANCELLED-ish) exactly
+  // like it already did against the local AsyncStorage array - this just
+  // swaps the source. EXPIRED requests (the artisan never responded in
+  // time) are deliberately excluded here, not just filtered client-side —
+  // the artisan should never see a request that timed out on them.
   app.get('/mine', { preHandler: requireArtisan }, async (req, reply) => {
     const requests = await prisma.serviceRequest.findMany({
-      where:   { artisanId: req.authUser.id, deletedAt: null },
+      where:   { artisanId: req.authUser.id, deletedAt: null, status: { not: 'EXPIRED' } },
       include,
       orderBy: { createdAt: 'desc' },
     });
@@ -324,7 +327,7 @@ const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
     const isArtisan = req.authUser.role === 'artisan' && sr.artisanId === req.authUser.id;
     if (!isUser && !isArtisan) return reply.status(403).send(fail('FORBIDDEN', 'Not your request.'));
 
-    if (['COMPLETED', 'USER_CANCELLED', 'ARTISAN_CANCELLED', 'ARTISAN_REJECTED'].includes(sr.status)) {
+    if (['COMPLETED', 'USER_CANCELLED', 'ARTISAN_CANCELLED', 'ARTISAN_REJECTED', 'EXPIRED'].includes(sr.status)) {
       return reply.status(409).send(fail('INVALID_STATUS', `Cannot cancel a request already in status ${sr.status}.`));
     }
 
@@ -335,6 +338,28 @@ const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
         cancelledBy: isUser ? 'USER' : 'ARTISAN',
         cancellationReason: parsed.success ? (parsed.data.reason ?? null) : null,
       },
+      include,
+    });
+    return reply.send(ok(serialize(updated)));
+  });
+
+  // ── PATCH /:id/expire — user: the artisan never responded within the
+  // client-side 90s waiting window. Distinct from /cancel (USER_CANCELLED)
+  // — only valid from PENDING, since once the artisan has acted (accepted/
+  // rejected) a timeout is no longer the relevant outcome. Requests landing
+  // here are excluded from GET /service-requests/mine, so the artisan never
+  // sees them at all.
+  app.patch<{ Params: { id: string } }>('/:id/expire', { preHandler: requireUser }, async (req, reply) => {
+    const sr = await prisma.serviceRequest.findUnique({ where: { id: req.params.id } });
+    if (!sr || sr.deletedAt) return reply.status(404).send(fail('NOT_FOUND', 'Request not found.'));
+    if (sr.userId !== req.authUser.id) return reply.status(403).send(fail('FORBIDDEN', 'Not your request.'));
+    if (sr.status !== 'PENDING') {
+      return reply.status(409).send(fail('INVALID_STATUS', `Cannot expire a request in status ${sr.status}.`));
+    }
+
+    const updated = await prisma.serviceRequest.update({
+      where: { id: sr.id },
+      data: { status: 'EXPIRED' },
       include,
     });
     return reply.send(ok(serialize(updated)));

@@ -22,6 +22,11 @@ enum RequestStatus {
   USER_CANCELLED
   ARTISAN_CANCELLED
   ARTISAN_REJECTED
+  // The artisan never responded within the client-side 90s window — distinct
+  // from USER_CANCELLED (an explicit cancel). Deliberately excluded from
+  // GET /service-requests/mine so the artisan never sees a request that
+  // timed out before they ever acted on it.
+  EXPIRED
 }
 
 enum RequestType {
