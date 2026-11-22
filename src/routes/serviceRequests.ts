@@ -28,11 +28,15 @@ const createSchema = z.object({
   latitude:              z.number(),
   longitude:             z.number(),
   requestType:           z.enum(['COMMUNITY', 'INDEPENDENT']).default('INDEPENDENT'),
-  communityId:           z.string().uuid().optional(),
-  communityNameFreeText: z.string().max(255).optional(),
+  // .nullish() (not .optional()) — the mobile client sends explicit `null`
+  // for an INDEPENDENT request (communityId/communityNameFreeText are both
+  // `null`, not omitted), which .optional() alone rejects as "Expected
+  // string, received null".
+  communityId:           z.string().uuid().nullish(),
+  communityNameFreeText: z.string().max(255).nullish(),
 });
 
-const reasonSchema = z.object({ reason: z.string().max(500).optional() });
+const reasonSchema = z.object({ reason: z.string().max(500).nullish() });
 const acceptSchema = z.object({ latitude: z.number(), longitude: z.number() });
 
 // Shared across GET /:id and every PATCH action - the mobile side maps this
