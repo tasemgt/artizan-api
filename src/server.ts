@@ -47,9 +47,18 @@ app.register(helmet);
 
 app.register(compress);
 
+// 500/hour (the original default) was set before the real /service-requests
+// polling existed - MatchingAreaScreen alone polls every 3.5s while
+// waiting/enRoute/arrived (~1029 req/hour on its own), and ArtisanHomeScreen
+// polls every 8s while focused (~450 req/hour) - both easily blow past 500
+// well within an hour, especially from one shared IP (e.g. two simulators on
+// the same WiFi hitting the deployed Render API). A 1-hour window also means
+// a 1-hour lockout once hit - far too punishing for legitimate polling.
+// Raised with headroom and switched to a 1-minute window so a brief spike
+// recovers in a minute, not an hour.
 app.register(rateLimit, {
-  max: 500,
-  timeWindow: '1 hour',
+  max: 300,
+  timeWindow: '1 minute',
 });
 
 app.register(multipart, {
