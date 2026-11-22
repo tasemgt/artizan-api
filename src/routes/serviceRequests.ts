@@ -34,6 +34,10 @@ const createSchema = z.object({
   // string, received null".
   communityId:           z.string().uuid().nullish(),
   communityNameFreeText: z.string().max(255).nullish(),
+  // Human-readable address for where the user is requesting FROM — set by
+  // the mobile client (community name, or a reverse-geocoded address), NOT
+  // derived from the user's registered profile address here.
+  requestAddress:        z.string().max(500).nullish(),
 });
 
 const reasonSchema = z.object({ reason: z.string().max(500).nullish() });
@@ -81,7 +85,10 @@ const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) {
       return reply.status(400).send(fail('VALIDATION_ERROR', 'Invalid input.', parsed.error.flatten().fieldErrors));
     }
-    const { artisanId, categoryId, latitude, longitude, requestType, communityId, communityNameFreeText } = parsed.data;
+    const {
+      artisanId, categoryId, latitude, longitude, requestType,
+      communityId, communityNameFreeText, requestAddress,
+    } = parsed.data;
 
     const artisan = await prisma.artisan.findUnique({ where: { id: artisanId } });
     if (!artisan) return reply.status(404).send(fail('NOT_FOUND', 'Artisan not found.'));
@@ -97,6 +104,7 @@ const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
         requestType,
         communityId:           communityId ?? null,
         communityNameFreeText: communityNameFreeText ?? null,
+        requestAddress:        requestAddress ?? null,
         userCoords:            toGeoPoint(latitude, longitude),
         // Same value on both sides for now - no fee-split logic exists yet
         // (that's the wallet-fee-capture step, still separately deferred).

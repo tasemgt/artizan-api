@@ -321,6 +321,12 @@ model ServiceRequest {
   platformFeeArtisan    Decimal?       @db.Decimal(10, 2)
   feeDeductedAt         DateTime?
   userCoords            Json
+  // Human-readable address for where the user is requesting FROM — the
+  // community name for a COMMUNITY request, or a reverse-geocoded address
+  // for an INDEPENDENT one. Set once by the mobile client at creation time,
+  // not derived from User.address (that's the user's registered address,
+  // which may be nowhere near where they're actually requesting from).
+  requestAddress        String?
   artisanAcceptedCoords Json?
   coordinatesTrail      Json[]
   cancellationReason    String?
