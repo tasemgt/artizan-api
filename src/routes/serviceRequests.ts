@@ -38,6 +38,10 @@ const createSchema = z.object({
 
 const reasonSchema = z.object({ reason: z.string().max(500).nullish() });
 const acceptSchema = z.object({ latitude: z.number(), longitude: z.number() });
+const ratingSchema = z.object({
+  score: z.number().int().min(1).max(5),
+  comment: z.string().max(500).nullish(),
+});
 
 // Shared across GET /:id and every PATCH action - the mobile side maps this
 // into its own ArtisanServiceRequest/local shape at the fetch boundary
@@ -244,6 +248,58 @@ const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
       include,
     });
     return reply.send(ok(serialize(updated)));
+  });
+
+  // ── POST /:id/rating — user rates the artisan after a COMPLETED request.
+  // Also rolls the score into the artisan's aggregate rating/totalRatings
+  // (already displayed on ArtisanCard during matching, previously always
+  // 0 since nothing ever wrote to it) — both in one transaction so the
+  // Rating row and the aggregate never drift apart.
+  app.post<{ Params: { id: string } }>('/:id/rating', { preHandler: requireUser }, async (req, reply) => {
+    const parsed = ratingSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send(fail('VALIDATION_ERROR', 'Invalid input.', parsed.error.flatten().fieldErrors));
+    }
+    const sr = await prisma.serviceRequest.findUnique({ where: { id: req.params.id } });
+    if (!sr || sr.deletedAt) return reply.status(404).send(fail('NOT_FOUND', 'Request not found.'));
+    if (sr.userId !== req.authUser.id) return reply.status(403).send(fail('FORBIDDEN', 'Not your request.'));
+    if (sr.status !== 'COMPLETED') {
+      return reply.status(409).send(fail('INVALID_STATUS', 'Can only rate a completed request.'));
+    }
+    if (!sr.artisanId) {
+      return reply.status(409).send(fail('INVALID_STATUS', 'This request has no artisan to rate.'));
+    }
+
+    const alreadyRated = await prisma.rating.findUnique({ where: { serviceRequestId: sr.id } });
+    if (alreadyRated) return reply.status(409).send(fail('ALREADY_RATED', 'You already rated this request.'));
+
+    const { score, comment } = parsed.data;
+
+    const rating = await prisma.$transaction(async (tx) => {
+      const created = await tx.rating.create({
+        data: {
+          serviceRequestId: sr.id,
+          userId: req.authUser.id,
+          artisanId: sr.artisanId!,
+          score,
+          comment: comment ?? null,
+        },
+      });
+
+      const artisan = await tx.artisan.findUnique({ where: { id: sr.artisanId! } });
+      if (artisan) {
+        const newTotal = artisan.totalRatings + 1;
+        const newAverage = (artisan.rating * artisan.totalRatings + score) / newTotal;
+        await tx.artisan.update({
+          where: { id: artisan.id },
+          data: { rating: newAverage, totalRatings: newTotal },
+        });
+      }
+
+      return created;
+    });
+
+    return reply.status(201).send(ok(rating));
   });
 
   // ── PATCH /:id/cancel — either side. Covers every cancel path at once:
