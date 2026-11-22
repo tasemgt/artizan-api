@@ -80,10 +80,14 @@ const walletsRoutes: FastifyPluginAsync = async (app) => {
     })();
     if (!wallet) return reply.status(404).send(fail('NOT_FOUND', 'Wallet not found.'));
 
-    const { id, ownerId, ownerType, balance, xpPoints, currency, isLocked } = wallet;
+    const { id, ownerId, ownerType, balance, lockedAmount, xpPoints, currency, isLocked } = wallet;
     return reply.send(ok({
       id, ownerId, ownerType, currency, isLocked,
-      balance:  Number(balance),
+      balance:         Number(balance),
+      lockedAmount:    Number(lockedAmount),
+      // What's actually spendable right now — escrowed amounts from a
+      // held platform fee (see serviceRequests.ts's /arrive) aren't.
+      availableBalance: Number(balance) - Number(lockedAmount),
       xpPoints,
     }));
   });

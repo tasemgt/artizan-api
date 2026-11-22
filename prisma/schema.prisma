@@ -36,6 +36,10 @@ enum RequestType {
 
 enum FeeStatus {
   PENDING
+  // Escrowed via Wallet.lockedAmount on arrival, not yet deducted. A
+  // request that ends up cancelled while still HELD needs manual admin
+  // review before release — there's no automated path for that yet.
+  HELD
   DEDUCTED
   FAILED
   WAIVED
@@ -323,7 +327,12 @@ model ServiceRequest {
   status                RequestStatus  @default(PENDING)
   feeStatus             FeeStatus      @default(PENDING)
   platformFeeUser       Decimal?       @db.Decimal(10, 2)
+  // No split exists — the artisan receives no part of this fee for now
+  // (explicit decision), kept only for historical/display parity with
+  // platformFeeUser. Revisit if a real revenue-split model is designed.
   platformFeeArtisan    Decimal?       @db.Decimal(10, 2)
+  // Set when the fee is escrowed on arrival (see Wallet.lockedAmount).
+  feeHeldAt             DateTime?
   feeDeductedAt         DateTime?
   userCoords            Json
   // Human-readable address for where the user is requesting FROM — the
@@ -375,6 +384,13 @@ model Wallet {
   ownerId     String
   ownerType   WalletOwnerType
   balance     Decimal         @default(0) @db.Decimal(12, 2)
+  // Escrowed amount — held on PATCH /service-requests/:id/arrive, released
+  // (and simultaneously deducted from balance) on /confirm. Available
+  // balance for new spending = balance - lockedAmount, never raw balance.
+  // Deliberately not released automatically if the request is cancelled
+  // after a hold is placed — stays locked pending manual admin review (no
+  // release endpoint exists yet, flagged for later).
+  lockedAmount Decimal        @default(0) @db.Decimal(12, 2)
   xpPoints    Int             @default(0)
   currency    String          @default("NGN")
   isLocked    Boolean         @default(false)

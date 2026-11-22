@@ -198,6 +198,9 @@ const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
 
   // ── PATCH /:id/arrive — artisan. Generates the access code here for
   // COMMUNITY requests, matching the exact moment the old simulation did.
+  // Also where the platform fee gets ESCROWED (held, not yet deducted) —
+  // see Wallet.lockedAmount. The artisan receives no part of this fee, by
+  // explicit decision — no credit to their wallet anywhere in this flow.
   app.patch<{ Params: { id: string } }>('/:id/arrive', { preHandler: requireArtisan }, async (req, reply) => {
     const sr = await prisma.serviceRequest.findUnique({ where: { id: req.params.id } });
     if (!sr || sr.deletedAt) return reply.status(404).send(fail('NOT_FOUND', 'Request not found.'));
@@ -207,19 +210,61 @@ const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const expiryHours = parseInt(process.env.ACCESS_CODE_EXPIRY_HOURS ?? '4', 10);
-    const updated = await prisma.serviceRequest.update({
-      where: { id: sr.id },
-      data: {
-        status: 'ARTISAN_ARRIVED',
-        ...(sr.requestType === 'COMMUNITY'
-          ? {
-              accessCode: generateAccessCode(),
-              accessCodeExpiresAt: new Date(Date.now() + expiryHours * 60 * 60 * 1000),
-            }
-          : {}),
-      },
-      include,
+    const fee = sr.platformFeeUser;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      // Best-effort hold — insufficient available funds here doesn't block
+      // a real-world arrival. feeStatus just stays PENDING instead of
+      // HELD, and /confirm falls back to attempting a direct capture.
+      // Known gap: no retry/notification path if that also fails — see
+      // CLAUDE.md.
+      let feeFields: { feeHeldAt?: Date; feeStatus?: 'HELD' } = {};
+      if (fee != null) {
+        const user = await tx.user.findUnique({ where: { id: sr.userId } });
+        const wallet = user ? await tx.wallet.findUnique({ where: { id: user.walletId } }) : null;
+        if (wallet) {
+          const available = Number(wallet.balance) - Number(wallet.lockedAmount);
+          if (available >= Number(fee)) {
+            await tx.wallet.update({
+              where: { id: wallet.id },
+              data: { lockedAmount: { increment: fee } },
+            });
+            // Raw balance is untouched by a hold — only lockedAmount moves.
+            // status PENDING here means "held, not yet captured", updated
+            // to SUCCESS on /confirm (see below) rather than creating a
+            // second transaction row for the same fee.
+            await tx.walletTransaction.create({
+              data: {
+                walletId: wallet.id,
+                type: 'PLATFORM_FEE',
+                amount: fee,
+                balanceBefore: wallet.balance,
+                balanceAfter: wallet.balance,
+                status: 'PENDING',
+                serviceRequestId: sr.id,
+              },
+            });
+            feeFields = { feeHeldAt: new Date(), feeStatus: 'HELD' };
+          }
+        }
+      }
+
+      return tx.serviceRequest.update({
+        where: { id: sr.id },
+        data: {
+          status: 'ARTISAN_ARRIVED',
+          ...feeFields,
+          ...(sr.requestType === 'COMMUNITY'
+            ? {
+                accessCode: generateAccessCode(),
+                accessCodeExpiresAt: new Date(Date.now() + expiryHours * 60 * 60 * 1000),
+              }
+            : {}),
+        },
+        include,
+      });
     });
+
     return reply.send(ok(serialize(updated)));
   });
 
@@ -244,7 +289,11 @@ const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // ── PATCH /:id/confirm — user confirms the artisan's completion claim.
-  // The only path to the final COMPLETED status in this pass.
+  // The only path to the final COMPLETED status in this pass. Also where
+  // the held fee gets CAPTURED — released from escrow and actually
+  // deducted, in the same operation. The artisan gets no part of it
+  // (explicit decision for this cycle) - there's no corresponding credit
+  // anywhere in this handler.
   app.patch<{ Params: { id: string } }>('/:id/confirm', { preHandler: requireUser }, async (req, reply) => {
     const sr = await prisma.serviceRequest.findUnique({ where: { id: req.params.id } });
     if (!sr || sr.deletedAt) return reply.status(404).send(fail('NOT_FOUND', 'Request not found.'));
@@ -253,11 +302,75 @@ const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(409).send(fail('INVALID_STATUS', `Cannot confirm from status ${sr.status}.`));
     }
 
-    const updated = await prisma.serviceRequest.update({
-      where: { id: sr.id },
-      data: { status: 'COMPLETED', completedAt: new Date() },
-      include,
+    const fee = sr.platformFeeUser;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      let feeFields: { feeDeductedAt?: Date; feeStatus?: 'DEDUCTED' | 'FAILED' } = {};
+
+      if (fee != null) {
+        // Resolved via the user row (wallet id lives there), not a direct
+        // lookup by authUser.id (that's the User's own id, not the wallet's).
+        const user = await tx.user.findUnique({ where: { id: sr.userId } });
+        const realWallet = user ? await tx.wallet.findUnique({ where: { id: user.walletId } }) : null;
+
+        if (realWallet && sr.feeStatus === 'HELD') {
+          // Happy path — release the escrow and spend it in one step.
+          await tx.wallet.update({
+            where: { id: realWallet.id },
+            data: {
+              balance:      { decrement: fee },
+              lockedAmount: { decrement: fee },
+            },
+          });
+          const pendingTx = await tx.walletTransaction.findFirst({
+            where: { serviceRequestId: sr.id, type: 'PLATFORM_FEE', status: 'PENDING' },
+          });
+          if (pendingTx) {
+            await tx.walletTransaction.update({
+              where: { id: pendingTx.id },
+              data: {
+                status: 'SUCCESS',
+                balanceBefore: realWallet.balance,
+                balanceAfter:  Number(realWallet.balance) - Number(fee),
+              },
+            });
+          }
+          feeFields = { feeDeductedAt: new Date(), feeStatus: 'DEDUCTED' };
+        } else if (realWallet) {
+          // No hold was ever placed (insufficient funds at arrival time) —
+          // attempt a direct capture now instead of silently giving up.
+          const available = Number(realWallet.balance) - Number(realWallet.lockedAmount);
+          if (available >= Number(fee)) {
+            const newBalance = Number(realWallet.balance) - Number(fee);
+            await tx.wallet.update({ where: { id: realWallet.id }, data: { balance: newBalance } });
+            await tx.walletTransaction.create({
+              data: {
+                walletId: realWallet.id,
+                type: 'PLATFORM_FEE',
+                amount: fee,
+                balanceBefore: realWallet.balance,
+                balanceAfter: newBalance,
+                status: 'SUCCESS',
+                serviceRequestId: sr.id,
+              },
+            });
+            feeFields = { feeDeductedAt: new Date(), feeStatus: 'DEDUCTED' };
+          } else {
+            // Still insufficient — don't block the service completion
+            // itself over a billing problem. Flagged as a known gap: no
+            // collections/follow-up flow exists yet for a FAILED fee.
+            feeFields = { feeStatus: 'FAILED' };
+          }
+        }
+      }
+
+      return tx.serviceRequest.update({
+        where: { id: sr.id },
+        data: { status: 'COMPLETED', completedAt: new Date(), ...feeFields },
+        include,
+      });
     });
+
     return reply.send(ok(serialize(updated)));
   });
 
@@ -318,6 +431,16 @@ const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
   // completion claim (same minimal-placeholder behavior as before - no
   // dedicated reason-capture screen for THIS path, see CLAUDE.md), and the
   // artisan cancelling after having already accepted.
+  //
+  // Deliberately does NOT touch Wallet.lockedAmount or feeStatus at all,
+  // even if a hold was already placed (sr.feeStatus === 'HELD' from
+  // PATCH .../arrive) — the escrowed amount stays locked indefinitely.
+  // Explicit decision: a cancellation after the artisan has arrived needs
+  // a human admin to review why before funds are released, not an
+  // automatic refund. No admin-facing release endpoint exists yet — flagged
+  // for later (see CLAUDE.md). The query such an endpoint would need:
+  // ServiceRequest where status IN (USER_CANCELLED, ARTISAN_CANCELLED) AND
+  // feeStatus = HELD.
   app.patch<{ Params: { id: string } }>('/:id/cancel', { preHandler: requireRole('user', 'artisan') }, async (req, reply) => {
     const parsed = reasonSchema.safeParse(req.body);
     const sr = await prisma.serviceRequest.findUnique({ where: { id: req.params.id } });
