@@ -52,10 +52,19 @@ const ratingSchema = z.object({
 // (same mapApiArtisanToDummy-style pattern already used for /artisans/nearby),
 // so this just returns the real row with its relations, nothing bespoke.
 const include = { user: true, category: true } as const;
+// Richer include for the USER's own GET /mine (real, DB-backed history) —
+// needs the artisan's own details (with their category, for the icon) and
+// the real Rating row, neither of which any other endpoint needs.
+const includeForUserHistory = {
+  category: true,
+  artisan: { include: { category: true } },
+  rating: true,
+} as const;
 function serialize(sr: any) {
   return {
     ...sr,
-    user: sr.user ? sanitiseUser(sr.user) : null,
+    user: sr.user ? sanitiseUser(sr.user) : sr.user,
+    artisan: sr.artisan ? sanitiseUser(sr.artisan) : sr.artisan,
     // Prisma Decimal serializes to a string by default - the mobile
     // ApiServiceRequest type declares these as `number | null`.
     platformFeeUser: sr.platformFeeUser != null ? Number(sr.platformFeeUser) : null,
@@ -72,10 +81,6 @@ const toGeoPoint = (latitude: number, longitude: number) => ({
 });
 
 const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
-
-  app.get('/', async (_req, reply) => {
-    return reply.send(ok([]));
-  });
 
   // ── POST / — user: create a request addressed to a specific artisan ──
   // (one targeted artisan, not a broadcast - matches the existing nearby-
@@ -117,17 +122,27 @@ const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
     return reply.status(201).send(ok(serialize(serviceRequest)));
   });
 
-  // ── GET /mine — artisan: every request addressed to them, any status
-  // EXCEPT EXPIRED. Mobile does its own client-side filtering per screen
-  // (Home: PENDING/ACCEPTED-ish, History: COMPLETED/CANCELLED-ish) exactly
-  // like it already did against the local AsyncStorage array - this just
-  // swaps the source. EXPIRED requests (the artisan never responded in
-  // time) are deliberately excluded here, not just filtered client-side —
-  // the artisan should never see a request that timed out on them.
-  app.get('/mine', { preHandler: requireArtisan }, async (req, reply) => {
+  // ── GET /mine — real, DB-backed history/inbox for EITHER side. Mobile
+  // does its own client-side filtering per screen (Home: PENDING/
+  // ACCEPTED-ish, History: COMPLETED/CANCELLED/REJECTED/EXPIRED-ish) off
+  // this same list, same pattern already established on the artisan side.
+  //
+  // - ARTISAN: every request addressed to them, any status EXCEPT
+  //   EXPIRED. EXPIRED (the artisan never responded in time) is
+  //   deliberately excluded here, not just filtered client-side — the
+  //   artisan should never see a request that timed out on them.
+  // - USER: every request THEY created, every status INCLUDING EXPIRED —
+  //   from the user's own point of view, a request that timed out while
+  //   waiting for a response is still part of their own history. Also
+  //   includes the artisan's own details + the real Rating row, which the
+  //   artisan's side never needs.
+  app.get('/mine', { preHandler: requireRole('user', 'artisan') }, async (req, reply) => {
+    const isArtisan = req.authUser.role === 'artisan';
     const requests = await prisma.serviceRequest.findMany({
-      where:   { artisanId: req.authUser.id, deletedAt: null, status: { not: 'EXPIRED' } },
-      include,
+      where: isArtisan
+        ? { artisanId: req.authUser.id, deletedAt: null, status: { not: 'EXPIRED' } }
+        : { userId: req.authUser.id, deletedAt: null },
+      include: isArtisan ? include : includeForUserHistory,
       orderBy: { createdAt: 'desc' },
     });
     return reply.send(ok(requests.map(serialize)));
@@ -166,6 +181,7 @@ const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
       data: {
         status: 'ARTISAN_ACCEPTED',
         artisanAcceptedCoords: toGeoPoint(parsed.data.latitude, parsed.data.longitude),
+        acceptedAt: new Date(),
       },
       include,
     });
@@ -253,6 +269,7 @@ const serviceRequestsRoutes: FastifyPluginAsync = async (app) => {
         where: { id: sr.id },
         data: {
           status: 'ARTISAN_ARRIVED',
+          arrivedAt: new Date(),
           ...feeFields,
           ...(sr.requestType === 'COMMUNITY'
             ? {

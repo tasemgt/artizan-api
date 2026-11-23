@@ -334,6 +334,13 @@ model ServiceRequest {
   // Set when the fee is escrowed on arrival (see Wallet.lockedAmount).
   feeHeldAt             DateTime?
   feeDeductedAt         DateTime?
+  // Real Service Trail timestamps — set on the real PATCH /:id/accept and
+  // /:id/arrive transitions. Previously only tracked client-side (both
+  // sides had their own local copy, neither persisted), which meant the
+  // "Service Trail" shown in history was reconstructed from whatever the
+  // device happened to have in memory at record time, not a real fact.
+  acceptedAt            DateTime?
+  arrivedAt             DateTime?
   userCoords            Json
   // Human-readable address for where the user is requesting FROM — the
   // community name for a COMMUNITY request, or a reverse-geocoded address
